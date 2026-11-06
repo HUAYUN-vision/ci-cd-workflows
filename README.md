@@ -1,48 +1,121 @@
 # ci-cd-workflows
 
-Переиспользуемые GitHub Actions workflow для всех проектов.
+Переиспользуемые GitHub Actions workflow и шаблоны конфигов для всех проектов.
+
+| Шаблон | Назначение |
+| ------ | ---------- |
+| [`node-ci.yml`](.github/workflows/node-ci.yml) | Установка зависимостей через Socket Firewall + формат, линт, типы, тесты, сборка |
+| [`version.yml`](.github/workflows/version.yml) | Автоповышение версии по Conventional Commits (только `main`) |
+| [`dependabot-sync.yml`](.github/workflows/dependabot-sync.yml) | Синхронизация `.github/dependabot.yml` с шаблоном из [`templates/dependabot/`](templates/dependabot) |
+
+## Быстрое подключение (Node.js / NestJS)
+
+`.github/workflows/ci.yml`:
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    uses: HUAYUN-vision/ci-cd-workflows/.github/workflows/node-ci.yml@main
+    permissions:
+      contents: read
+
+  version:
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: HUAYUN-vision/ci-cd-workflows/.github/workflows/version.yml@main
+    permissions:
+      contents: write
+```
+
+`.github/workflows/dependabot-sync.yml`:
+
+```yaml
+name: Dependabot sync
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    uses: HUAYUN-vision/ci-cd-workflows/.github/workflows/dependabot-sync.yml@main
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      template: nestjs # или node
+```
+
+### Настройки репозиториев
+
+- Если `ci-cd-workflows` приватный: **Settings → Actions → General → Access** →
+  «Accessible from repositories in the organization».
+- Для `dependabot-sync` в проекте: **Settings → Actions → General → Workflow permissions** →
+  «Allow GitHub Actions to create and approve pull requests».
+
+---
+
+## node-ci
+
+Ставит Node.js (из `.nvmrc`), устанавливает зависимости через
+[Socket Firewall](https://github.com/SocketDev/action) — `sfw npm ci` блокирует
+известные вредоносные пакеты прямо на установке, — затем запускает npm-скрипты по порядку.
+
+| Input               | По умолчанию | Описание |
+| ------------------- | ------------ | -------- |
+| `node-version-file` | `.nvmrc`     | Файл с версией Node.js |
+| `node-version`      | `''`         | Явная версия Node.js (важнее файла) |
+| `working-directory` | `.`          | Папка проекта |
+| `scripts`           | `format:check`, `lint:check`, `typecheck`, `test`, `test:e2e`, `build` | npm-скрипты, по одному на строку |
+| `socket-firewall`   | `true`       | Ставить зависимости через Socket Firewall |
+
+| Secret         | Описание |
+| -------------- | -------- |
+| `socket-token` | Socket API token → режим `firewall-enterprise`. Без него — бесплатный `firewall-free` |
+
+Свой набор скриптов:
+
+```yaml
+    with:
+      scripts: |
+        lint:check
+        test
+        build
+```
+
+> Для отчётов о рисках зависимостей в PR дополнительно установите
+> [Socket GitHub App](https://github.com/apps/socket-security) на организацию — она работает без workflow.
 
 ## version
 
-`.github/workflows/version.yml` автоматически повышает версию проекта по
-[Conventional Commits](https://www.conventionalcommits.org/). **Работает только на ветке `main`.**
+Повышает версию по [Conventional Commits](https://www.conventionalcommits.org/). **Только на ветке `main`.**
 
-| Коммиты с последнего тега                       | Изменение версии |
-| ----------------------------------------------- | ---------------- |
+| Коммиты с последнего тега | Изменение версии |
+| ------------------------- | ---------------- |
 | `feat!: ...`, `fix(api)!: ...`, `BREAKING CHANGE:` в теле | major (`1.2.3 → 2.0.0`) |
-| `feat: ...`                                     | minor (`1.2.3 → 1.3.0`) |
-| `fix: ...`, `perf: ...`                         | patch (`1.2.3 → 1.2.4`) |
-| `chore`, `docs`, `refactor`, `test`, ...        | не меняется      |
+| `feat: ...`               | minor (`1.2.3 → 1.3.0`) |
+| `fix: ...`, `perf: ...`   | patch (`1.2.3 → 1.2.4`) |
+| `chore`, `docs`, `refactor`, `test`, ... | не меняется |
 
-Что делает workflow:
+Что делает:
 
 1. Находит последний тег `vX.Y.Z` (если тегов нет — берёт версию из файла версии).
 2. Считает новую версию по коммитам.
 3. Обновляет `package.json` + `package-lock.json` (или текстовый файл `VERSION`).
 4. Коммитит `chore(release): vX.Y.Z` в `main`, ставит тег `vX.Y.Z`.
 5. Создаёт GitHub Release со списком изменений.
-
-### Подключение
-
-В проекте создайте `.github/workflows/version.yml`:
-
-```yaml
-name: Version
-
-on:
-  push:
-    branches: [main]
-
-jobs:
-  version:
-    uses: HUAYUN-vision/ci-cd-workflows/.github/workflows/version.yml@main
-    permissions:
-      contents: write
-    # secrets:
-    #   token: ${{ secrets.RELEASE_TOKEN }}  # если main защищена от прямого push
-```
-
-### Параметры
 
 | Input            | По умолчанию   | Описание |
 | ---------------- | -------------- | -------- |
@@ -54,7 +127,7 @@ jobs:
 
 | Secret  | Описание |
 | ------- | -------- |
-| `token` | PAT или GitHub App token. Нужен, если на `main` включена защита ветки, запрещающая прямой push. По умолчанию — `GITHUB_TOKEN` |
+| `token` | PAT / GitHub App token, если на `main` запрещён прямой push. По умолчанию — `GITHUB_TOKEN` |
 
 | Output     | Описание |
 | ---------- | -------- |
@@ -62,18 +135,9 @@ jobs:
 | `version`  | Новая версия, например `1.3.0` |
 | `tag`      | Новый тег, например `v1.3.0` |
 
-### Использование результата (например, деплой)
-
-Push от `GITHUB_TOKEN` не запускает другие workflow, поэтому события по
-новому тегу не будет. Запускайте следующие шаги в том же workflow:
+Push от `GITHUB_TOKEN` не запускает другие workflow, поэтому деплой делайте в том же workflow:
 
 ```yaml
-jobs:
-  version:
-    uses: HUAYUN-vision/ci-cd-workflows/.github/workflows/version.yml@main
-    permissions:
-      contents: write
-
   deploy:
     needs: version
     if: needs.version.outputs.released == 'true'
@@ -82,8 +146,20 @@ jobs:
       - run: echo "Deploy ${{ needs.version.outputs.tag }}"
 ```
 
-### Важно
+## dependabot-sync
 
-- Если репозиторий `ci-cd-workflows` приватный: **Settings → Actions → General → Access** →
-  «Accessible from repositories in the organization».
-- Release-коммиты `chore(release): ...` пропускаются, поэтому зацикливания нет.
+GitHub читает конфиг Dependabot только из самого репозитория — подключить его через `uses:`
+нельзя. Поэтому эталонные конфиги лежат в [`templates/dependabot/`](templates/dependabot), а этот
+workflow (по расписанию или вручную) открывает в проекте PR, если `.github/dependabot.yml`
+отличается от шаблона.
+
+| Input                  | По умолчанию | Описание |
+| ---------------------- | ------------ | -------- |
+| `template`             | —            | Имя шаблона: `node`, `nestjs` |
+| `templates-repository` | `HUAYUN-vision/ci-cd-workflows` | Репозиторий с шаблонами |
+| `templates-ref`        | `main`       | Ветка/тег шаблонов |
+| `branch`               | `chore/dependabot-sync` | Ветка для PR |
+
+| Secret            | Описание |
+| ----------------- | -------- |
+| `templates-token` | Токен на чтение репозитория шаблонов, если он приватный и `GITHUB_TOKEN` к нему не имеет доступа |

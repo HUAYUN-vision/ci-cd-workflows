@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      nestjs:
+        patterns: ['@nestjs/*']
+      lint:
+        patterns: ['eslint*', '@eslint/*', 'typescript-eslint', 'prettier', 'eslint-*']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

@@ -1,0 +1,87 @@
+# Reusable workflow: CI для Node.js-проектов.
+#
+# Устанавливает зависимости (через Socket Firewall — блокирует вредоносные
+# пакеты), затем по очереди запускает npm-скрипты: форматирование, линт,
+# типы, тесты, сборку.
+
+name: Node CI
+
+on:
+  workflow_call:
+    inputs:
+      node-version-file:
+        description: "Файл с версией Node.js"
+        type: string
+        default: .nvmrc
+      node-version:
+        description: "Версия Node.js (если задана — важнее node-version-file)"
+        type: string
+        default: ""
+      working-directory:
+        type: string
+        default: .
+      scripts:
+        description: "npm-скрипты для запуска, по одному на строку (в указанном порядке)"
+        type: string
+        default: |
+          format:check
+          lint:check
+          typecheck
+          test
+          test:e2e
+          build
+      socket-firewall:
+        description: "Устанавливать зависимости через Socket Firewall (socket.dev)"
+        type: boolean
+        default: true
+    secrets:
+      socket-token:
+        description: "Socket API token. Если задан — режим firewall-enterprise, иначе firewall-free"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ inputs.node-version == '' && format('{0}/{1}', inputs.working-directory, inputs.node-version-file) || '' }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Setup Socket Firewall
+        if: inputs.socket-firewall
+        uses: SocketDev/action@ba6de6cc0565af1f42295590380973573297e31f # v1.3.2
+        with:
+          mode: ${{ secrets.socket-token != '' && 'firewall-enterprise' || 'firewall-free' }}
+          socket-token: ${{ secrets.socket-token }}
+
+      - name: Install dependencies
+        run: |
+          if [[ "${{ inputs.socket-firewall }}" == "true" ]]; then
+            sfw npm ci
+          else
+            npm ci
+          fi
+
+      - name: Run scripts
+        env:
+          SCRIPTS: ${{ inputs.scripts }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r script; do
+            script="$(echo "$script" | xargs)"
+            [[ -z "$script" ]] && continue
+            echo "::group::npm run $script"
+            npm run "$script"
+            echo "::endgroup::"
+          done <<< "$SCRIPTS"
