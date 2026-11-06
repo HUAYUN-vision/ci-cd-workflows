@@ -1,0 +1,54 @@
+# Версионирование самого репозитория шаблонов.
+#
+# На каждый push в main: version.yml ставит тег vX.Y.Z по коммитам,
+# затем плавающий тег vX переносится на новый релиз.
+# Проекты подключают шаблоны через @v1 — получают все совместимые обновления,
+# а ломающие изменения (feat!: / BREAKING CHANGE) выходят как v2.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Lint workflows (actionlint)
+        run: |
+          set -euo pipefail
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+
+  version:
+    needs: check
+    uses: ./.github/workflows/version.yml
+    permissions:
+      contents: write
+    with:
+      version-file: ''
+
+  major-tag:
+    needs: version
+    if: needs.version.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Move major tag
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          major="${TAG%%.*}"
+          git tag -f "$major" "$TAG^{commit}"
+          git push -f origin "refs/tags/$major"
+          echo "$major -> $TAG"

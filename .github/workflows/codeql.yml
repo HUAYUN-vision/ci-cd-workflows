@@ -1,0 +1,54 @@
+# Reusable workflow: статический анализ кода CodeQL.
+#
+# Результаты — во вкладке Security → Code scanning.
+# Для приватных репозиториев нужен GitHub Advanced Security (Code Security).
+
+name: CodeQL
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        description: "Языки CodeQL через запятую: javascript-typescript, python, go, java-kotlin, actions, ..."
+        type: string
+        default: javascript-typescript,actions
+      queries:
+        description: "Наборы запросов: security-extended, security-and-quality"
+        type: string
+        default: security-extended
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      languages: ${{ steps.split.outputs.languages }}
+    steps:
+      - id: split
+        env:
+          LANGUAGES: ${{ inputs.languages }}
+        run: echo "languages=$(jq -cn --arg l "$LANGUAGES" '$l | split(",") | map(gsub("\\s"; "")) | map(select(length > 0))')" >> "$GITHUB_OUTPUT"
+
+  analyze:
+    needs: matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.matrix.outputs.languages) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: ${{ inputs.queries }}
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

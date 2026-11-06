@@ -1,0 +1,57 @@
+# Reusable workflow: автомерж PR от Dependabot.
+#
+# Вызывайте его через `needs:` после CI-джобов: тогда мерж происходит только
+# если все проверки прошли. Мержит patch/minor-обновления (настраивается),
+# major оставляет на ручное ревью.
+
+name: Dependabot auto-merge
+
+on:
+  workflow_call:
+    inputs:
+      update-types:
+        description: "Типы обновлений для автомержа, через запятую"
+        type: string
+        default: version-update:semver-patch,version-update:semver-minor
+      merge-method:
+        description: "squash | merge | rebase"
+        type: string
+        default: squash
+    secrets:
+      token:
+        description: >-
+          PAT / GitHub App token. С GITHUB_TOKEN мерж не запускает push-workflow в main
+          (не будет version/docker). Укажите токен, если это нужно
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dependabot/fetch-metadata@v3
+        id: meta
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ secrets.token || github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          ALLOWED: ${{ inputs.update-types }}
+          METHOD: ${{ inputs.merge-method }}
+          DEPS: ${{ steps.meta.outputs.dependency-names }}
+        run: |
+          set -euo pipefail
+          echo "Dependencies: $DEPS, update type: ${UPDATE_TYPE:-<unknown>}"
+          if [[ -z "$UPDATE_TYPE" || ",${ALLOWED}," != *",${UPDATE_TYPE},"* ]]; then
+            echo "Тип обновления не в списке для автомержа — оставляю на ручное ревью."
+            exit 0
+          fi
+          gh pr review "$PR_URL" --approve --body "Auto-approved: $UPDATE_TYPE, CI passed." || true
+          gh pr merge "$PR_URL" "--${METHOD}" --delete-branch

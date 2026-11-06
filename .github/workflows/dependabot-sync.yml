@@ -18,7 +18,7 @@ on:
         default: HUAYUN-vision/ci-cd-workflows
       templates-ref:
         type: string
-        default: main
+        default: v1
       branch:
         description: "Ветка для PR"
         type: string
@@ -36,9 +36,9 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.templates-repository }}
           ref: ${{ inputs.templates-ref }}

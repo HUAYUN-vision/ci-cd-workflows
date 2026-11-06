@@ -1,0 +1,56 @@
+# Reusable workflow: проверка заголовка PR по Conventional Commits.
+#
+# При squash merge заголовок PR становится коммитом в main, а по нему
+# version.yml решает, повышать ли версию. Поэтому заголовок должен быть
+# в формате: type(scope)!: subject
+
+name: PR title
+
+on:
+  workflow_call:
+    inputs:
+      types:
+        description: "Разрешённые типы, через пробел"
+        type: string
+        default: feat fix docs style refactor perf test build ci chore revert
+      max-length:
+        type: number
+        default: 100
+
+permissions: {}
+
+jobs:
+  pr-title:
+    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          TYPES: ${{ inputs.types }}
+          MAX_LENGTH: ${{ inputs.max-length }}
+        run: |
+          set -euo pipefail
+          types_re="$(echo "$TYPES" | xargs | tr ' ' '|')"
+          re="^(${types_re})(\([a-zA-Z0-9._/-]+\))?!?: [^ ].*$"
+
+          if [[ ! "$TITLE" =~ $re ]]; then
+            {
+              echo "## ❌ Заголовок PR не соответствует Conventional Commits"
+              echo
+              echo "Сейчас: \`$TITLE\`"
+              echo
+              echo "Формат: \`type(scope)!: описание\`, типы: \`$TYPES\`"
+              echo
+              echo "Примеры: \`feat: add login\`, \`fix(api): handle null\`, \`feat!: drop v1 API\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Заголовок PR '$TITLE' не в формате 'type(scope): описание'. Разрешённые типы: $TYPES"
+            exit 1
+          fi
+
+          if (( ${#TITLE} > MAX_LENGTH )); then
+            echo "::error::Заголовок PR длиннее $MAX_LENGTH символов (${#TITLE})"
+            exit 1
+          fi
+
+          echo "✅ $TITLE"

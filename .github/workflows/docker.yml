@@ -1,0 +1,157 @@
+# Reusable workflow: сборка Docker-образа, сканирование Trivy, публикация в GHCR.
+#
+# - push: false (PR)  — образ только собирается и сканируется.
+# - push: true (main) — после сканирования публикуется с тегами
+#   X.Y.Z, X.Y, X (если передан version), latest и sha-<short>.
+
+name: Docker
+
+on:
+  workflow_call:
+    inputs:
+      push:
+        description: "Публиковать образ в registry"
+        type: boolean
+        default: false
+      ref:
+        description: "Git ref для сборки (например тег из version.yml). По умолчанию — текущий коммит"
+        type: string
+        default: ""
+      version:
+        description: "Версия образа (из version.yml), например 1.3.0"
+        type: string
+        default: ""
+      image:
+        description: "Имя образа. По умолчанию ghcr.io/<owner>/<repo> (в нижнем регистре)"
+        type: string
+        default: ""
+      registry:
+        type: string
+        default: ghcr.io
+      context:
+        type: string
+        default: .
+      file:
+        type: string
+        default: Dockerfile
+      platforms:
+        description: "Платформы для публикации, например linux/amd64,linux/arm64"
+        type: string
+        default: linux/amd64
+      trivy:
+        description: "Сканировать образ Trivy"
+        type: boolean
+        default: true
+      trivy-severity:
+        description: "Уровни уязвимостей, при которых сборка падает"
+        type: string
+        default: CRITICAL,HIGH
+      trivy-ignore-unfixed:
+        description: "Игнорировать уязвимости без доступного исправления"
+        type: boolean
+        default: true
+    secrets:
+      registry-username:
+        description: "Логин registry. По умолчанию github.actor (для GHCR)"
+        required: false
+      registry-password:
+        description: "Пароль/токен registry. По умолчанию GITHUB_TOKEN (для GHCR)"
+        required: false
+    outputs:
+      image:
+        value: ${{ jobs.docker.outputs.image }}
+      digest:
+        value: ${{ jobs.docker.outputs.digest }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.name.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Image name
+        id: name
+        env:
+          IMAGE: ${{ inputs.image }}
+          REGISTRY: ${{ inputs.registry }}
+        run: |
+          image="${IMAGE:-${REGISTRY}/${GITHUB_REPOSITORY}}"
+          echo "image=${image,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ steps.name.outputs.image }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.version }},enable=${{ inputs.version != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }},enable=${{ inputs.version != '' }}
+            type=semver,pattern={{major}},value=${{ inputs.version }},enable=${{ inputs.version != '' && !startsWith(inputs.version, '0.') }}
+            type=raw,value=latest,enable=${{ inputs.push }}
+            type=sha,prefix=sha-
+            type=ref,event=pr
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build image for scan
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.file }}
+          load: true
+          push: false
+          tags: ${{ steps.name.outputs.image }}:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy scan
+        if: inputs.trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.name.outputs.image }}:scan
+          severity: ${{ inputs.trivy-severity }}
+          ignore-unfixed: ${{ inputs.trivy-ignore-unfixed }}
+          exit-code: '1'
+          format: table
+
+      - name: Login to registry
+        if: inputs.push
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.registry-username || github.actor }}
+          password: ${{ secrets.registry-password || github.token }}
+
+      - name: Push image
+        id: push
+        if: inputs.push
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.file }}
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          provenance: true
+          sbom: true
+
+      - name: Summary
+        if: inputs.push
+        run: |
+          {
+            echo "## 🐳 Published"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo "Digest: \`${{ steps.push.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
